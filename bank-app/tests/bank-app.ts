@@ -4,9 +4,6 @@ import { BankApp } from "../target/types/bank_app";
 import { PublicKey, SystemProgram, TransactionInstruction } from "@solana/web3.js";
 import { BN } from "bn.js";
 import { 
-  createMint, 
-  mintTo, 
-  getOrCreateAssociatedTokenAccount, 
   getAssociatedTokenAddressSync, 
   createAssociatedTokenAccountInstruction, 
   TOKEN_PROGRAM_ID, 
@@ -18,6 +15,9 @@ describe("bank-app", () => {
   anchor.setProvider(provider);
   const program = anchor.workspace.BankApp as Program<BankApp>;
 
+  const MINT_ADDRESS = new PublicKey("6Zy6mwXfPtPMJ5PfB5q6w54Wpgckp2Z1rkuxHunbWWM6");
+  const CURRENT_TOKEN_PROGRAM = TOKEN_PROGRAM_ID; 
+
   const BANK_APP_ACCOUNTS = {
     bankInfo: PublicKey.findProgramAddressSync([Buffer.from("BANK_INFO_SEED")], program.programId)[0],
     bankVault: PublicKey.findProgramAddressSync([Buffer.from("BANK_VAULT_SEED")], program.programId)[0],
@@ -28,15 +28,12 @@ describe("bank-app", () => {
     }
   };
 
-  let mint: PublicKey;
+  let mint: PublicKey = MINT_ADDRESS;
   let userAta: PublicKey;
 
-  it("Setup Mint and Tokens", async () => {
-    const payer = (provider.wallet as any).payer;
-    mint = await createMint(provider.connection, payer, provider.publicKey, null, 9);
-    const userAtaAccount = await getOrCreateAssociatedTokenAccount(provider.connection, payer, mint, provider.publicKey);
-    userAta = userAtaAccount.address;
-    await mintTo(provider.connection, payer, mint, userAta, provider.publicKey, 2000000000 * 10**9);
+  it("Setup User ATA", async () => {
+    userAta = getAssociatedTokenAddressSync(mint, provider.publicKey, false, CURRENT_TOKEN_PROGRAM);
+    console.log("Sử dụng ví ATA:", userAta.toBase58());
   });
 
   it("Is initialized!", async () => {
@@ -53,7 +50,7 @@ describe("bank-app", () => {
   });
 
   it("Is deposited SOL!", async () => {
-    await program.methods.deposit(new BN(1_000_000)).accounts({
+    await program.methods.deposit(new BN(100_000)).accounts({
       bankInfo: BANK_APP_ACCOUNTS.bankInfo,
       bankVault: BANK_APP_ACCOUNTS.bankVault,
       userReserve: BANK_APP_ACCOUNTS.userReserve(provider.publicKey),
@@ -63,13 +60,23 @@ describe("bank-app", () => {
   });
 
   it("Is deposited token!", async () => {
-    const bankAta = getAssociatedTokenAddressSync(mint, BANK_APP_ACCOUNTS.bankInfo, true);
+    const bankAta = getAssociatedTokenAddressSync(mint, BANK_APP_ACCOUNTS.bankInfo, true, CURRENT_TOKEN_PROGRAM);
     let preInstructions: TransactionInstruction[] = [];
-    if (await provider.connection.getAccountInfo(bankAta) == null) {
-      preInstructions.push(createAssociatedTokenAccountInstruction(provider.publicKey, bankAta, BANK_APP_ACCOUNTS.bankInfo, mint));
+    
+    const accountInfo = await provider.connection.getAccountInfo(bankAta);
+    if (!accountInfo) {
+      preInstructions.push(
+        createAssociatedTokenAccountInstruction(
+          provider.publicKey, 
+          bankAta, 
+          BANK_APP_ACCOUNTS.bankInfo, 
+          mint,
+          CURRENT_TOKEN_PROGRAM
+        )
+      );
     }
 
-    await program.methods.depositToken(new BN(1_000_000_000)).accounts({
+    await program.methods.depositToken(new BN(10_000_000)).accounts({
       bankInfo: BANK_APP_ACCOUNTS.bankInfo,
       bankVault: BANK_APP_ACCOUNTS.bankVault,
       tokenMint: mint,
@@ -77,13 +84,13 @@ describe("bank-app", () => {
       bankAta,
       userReserve: BANK_APP_ACCOUNTS.userReserve(provider.publicKey, mint),
       user: provider.publicKey,
-      tokenProgram: TOKEN_PROGRAM_ID,
+      tokenProgram: CURRENT_TOKEN_PROGRAM,
       systemProgram: SystemProgram.programId
     }).preInstructions(preInstructions).rpc();
   });
 
   it("Is withdraw SOL!", async () => {
-    await program.methods.withdraw(new BN(500_000)).accounts({
+    await program.methods.withdraw(new BN(50_000)).accounts({
       bankInfo: BANK_APP_ACCOUNTS.bankInfo,
       bankVault: BANK_APP_ACCOUNTS.bankVault,
       userReserve: BANK_APP_ACCOUNTS.userReserve(provider.publicKey),
@@ -93,15 +100,15 @@ describe("bank-app", () => {
   });
 
   it("Is withdraw token!", async () => {
-    const bankAta = getAssociatedTokenAddressSync(mint, BANK_APP_ACCOUNTS.bankInfo, true);
-    await program.methods.withdrawToken(new BN(500_000)).accounts({
+    const bankAta = getAssociatedTokenAddressSync(mint, BANK_APP_ACCOUNTS.bankInfo, true, CURRENT_TOKEN_PROGRAM);
+    await program.methods.withdrawToken(new BN(1_000)).accounts({
       bankInfo: BANK_APP_ACCOUNTS.bankInfo,
       userReserve: BANK_APP_ACCOUNTS.userReserve(provider.publicKey, mint),
       user: provider.publicKey,
       mint,
       userTokenAccount: userAta,
       bankTokenAccount: bankAta,
-      tokenProgram: TOKEN_PROGRAM_ID,
+      tokenProgram: CURRENT_TOKEN_PROGRAM,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId
     }).rpc();
@@ -114,21 +121,19 @@ describe("bank-app", () => {
     }).rpc();
 
     try {
-      const bankAta = getAssociatedTokenAddressSync(mint, BANK_APP_ACCOUNTS.bankInfo, true);
-      await program.methods.withdrawToken(new BN(100)).accounts({
+      const bankAta = getAssociatedTokenAddressSync(mint, BANK_APP_ACCOUNTS.bankInfo, true, CURRENT_TOKEN_PROGRAM);
+      await program.methods.withdrawToken(new BN(1)).accounts({
         bankInfo: BANK_APP_ACCOUNTS.bankInfo,
         userReserve: BANK_APP_ACCOUNTS.userReserve(provider.publicKey, mint),
         user: provider.publicKey,
         mint,
         userTokenAccount: userAta,
         bankTokenAccount: bankAta,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: CURRENT_TOKEN_PROGRAM,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId
       }).rpc();
-    } catch (e) {
-      console.log("Success: Withdraw blocked by pause as expected.");
-    }
+    } catch (e) {}
 
     await program.methods.togglePause().accounts({
       bankInfo: BANK_APP_ACCOUNTS.bankInfo,
